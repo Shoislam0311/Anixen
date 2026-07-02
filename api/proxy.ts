@@ -1,6 +1,4 @@
-import type { VercelRequest, VercelResponse } from '@vercel/node';
-
-export default async function handler(req: VercelRequest, res: VercelResponse) {
+export default async function handler(req: any, res: any) {
   // CORS headers
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
@@ -16,8 +14,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(400).json({ error: 'Missing target parameter' });
   }
 
-  // Allowed providers - expanded list
-  const ALLOWED_DOMAINS = [
+  // Allowed domains
+  const ALLOWED = [
     'senshi.live',
     'api.jikan.moe',
     'animeheaven.me',
@@ -30,27 +28,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     'anikoto.net',
     'sub.ryuo.to',
     'youtu-chan.com',
-    'nekostream.site',
   ];
 
   try {
     const urlObj = new URL(target);
     const domain = urlObj.hostname;
 
-    const isAllowed = ALLOWED_DOMAINS.some(d => domain === d || domain.endsWith('.' + d));
+    const isAllowed = ALLOWED.some(d => domain === d || domain.endsWith('.' + d));
     if (!isAllowed) {
-      console.error('Proxy blocked: domain not allowed', domain);
-      return res.status(403).json({ error: 'Target domain not allowed', domain });
+      return res.status(403).json({ error: 'Domain not allowed', domain });
     }
 
-    // Build headers based on target domain
+    // Build headers based on domain
     const headers: Record<string, string> = {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
       'Accept': 'application/json, text/html, */*',
       'Accept-Language': 'en-US,en;q=0.9',
     };
 
-    // Set Referer and Origin based on target
     if (domain.includes('senshi')) {
       headers['Referer'] = 'https://senshi.live/';
       headers['Origin'] = 'https://senshi.live';
@@ -65,63 +60,43 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       headers['Origin'] = 'https://anikototv.to';
     }
 
-    // Build fetch options
-    const fetchOptions: RequestInit = {
+    const fetchOptions: any = {
       method: req.method || 'GET',
       headers,
       redirect: 'follow',
     };
 
-    // Handle POST/PUT requests with body
+    // Handle POST body
     if (req.method === 'POST' || req.method === 'PUT') {
       let body = req.body;
-
-      // If body is a string, try to parse it
       if (typeof body === 'string') {
-        try {
-          body = JSON.parse(body);
-        } catch {
-          // Keep as string
-        }
+        try { body = JSON.parse(body); } catch {}
       }
-
       fetchOptions.body = typeof body === 'string' ? body : JSON.stringify(body);
       headers['Content-Type'] = 'application/json';
     }
 
-    console.log(`[Proxy] ${req.method} ${target}`);
-
     const response = await fetch(target, fetchOptions);
-    const contentType = response.headers.get('content-type') || '';
+    const ct = response.headers.get('content-type') || '';
 
-    console.log(`[Proxy] Response: ${response.status} ${contentType}`);
-
-    // Handle different content types
-    if (contentType.includes('video') || contentType.includes('mpegurl') || contentType.includes('octet-stream')) {
-      // Video/streaming content - buffer and forward
+    // Video/streaming content
+    if (ct.includes('video') || ct.includes('mpegurl') || ct.includes('octet-stream')) {
       const buffer = await response.arrayBuffer();
-      res.setHeader('Content-Type', contentType);
-      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.setHeader('Content-Type', ct);
       return res.status(response.status).send(Buffer.from(buffer));
     }
 
-    if (contentType.includes('application/json')) {
+    // JSON
+    if (ct.includes('application/json')) {
       const data = await response.json();
       return res.status(response.status).json(data);
     }
 
-    // Text/HTML content
+    // Text/HTML
     const text = await response.text();
-    return res.status(response.status)
-      .setHeader('Content-Type', contentType || 'text/plain')
-      .send(text);
+    return res.status(response.status).setHeader('Content-Type', ct || 'text/plain').send(text);
 
   } catch (error: any) {
-    console.error('[Proxy] Error:', error.message);
-    return res.status(502).json({
-      error: 'Proxy request failed',
-      detail: error.message,
-      target,
-    });
+    return res.status(502).json({ error: 'Proxy failed', detail: error.message });
   }
 }
