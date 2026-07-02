@@ -11,20 +11,9 @@ import type {
   ServerResult,
   VideoSource,
 } from '@/types/streaming';
+import { proxyFetchHtml, getProxiedUrl } from '../fetch-helper';
 
 const BASE_URL = 'https://animeheaven.me';
-
-async function fetchHtml(url: string, options?: RequestInit): Promise<string> {
-  if (import.meta.env.PROD) {
-    const proxyUrl = `/api/proxy?target=${encodeURIComponent(url)}`;
-    const res = await fetch(proxyUrl, options);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return res.text();
-  }
-  const res = await fetch(url, options);
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.text();
-}
 
 export const animeheavenProvider: StreamingProvider = {
   name: 'animeheaven',
@@ -34,7 +23,7 @@ export const animeheavenProvider: StreamingProvider = {
 
   async search(options: SearchOptions): Promise<SearchResult[]> {
     try {
-      const html = await fetchHtml(
+      const html = await proxyFetchHtml(
         `${BASE_URL}/search.php?s=${encodeURIComponent(options.query)}`
       );
 
@@ -65,7 +54,7 @@ export const animeheavenProvider: StreamingProvider = {
 
   async getEpisodes(id: string): Promise<Episode[]> {
     try {
-      const html = await fetchHtml(`${BASE_URL}/anime.php?${id}`);
+      const html = await proxyFetchHtml(`${BASE_URL}/anime.php?${id}`);
 
       const regex = /onclick='gatea\("([a-f0-9]+)"\)'[\s\S]*?<div class='[^']*watch2[^']*'>(\d+)<\/div>/g;
       const episodes: Episode[] = [];
@@ -96,7 +85,7 @@ export const animeheavenProvider: StreamingProvider = {
     const gateKey = episode.id;
     const animeReferer = `${BASE_URL}/anime.php`;
 
-    const html = await fetchHtml(`${BASE_URL}/gate.php`, {
+    const html = await proxyFetchHtml(`${BASE_URL}/gate.php`, {
       headers: {
         Cookie: `key=${gateKey}`,
         Referer: animeReferer,
@@ -129,7 +118,7 @@ export const animeheavenProvider: StreamingProvider = {
 
     const videoSources: VideoSource[] = [
       {
-        url: videoUrl,
+        url: getProxiedUrl(videoUrl),
         quality: 'auto',
         type: 'mp4',
         subtitles: [],

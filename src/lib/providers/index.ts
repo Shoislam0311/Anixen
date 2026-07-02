@@ -17,6 +17,8 @@ export {
   // Legacy API
   searchAllProviders,
   getVideoServer,
+  // Proxy helper
+  getProxiedUrl,
 } from './streaming-manager';
 
 // Types

@@ -1,10 +1,8 @@
 import { useState, useRef, useEffect } from 'react';
 import { useStreaming } from '@/hooks/useStreaming';
+import { getProxiedUrl } from '@/lib/providers';
+import Hls from 'hls.js';
 import { Loader2, Play, Pause, Volume2, VolumeX, Maximize, SkipForward, AlertCircle } from 'lucide-react';
-
-declare global {
-  interface Window { Hls: any; }
-}
 
 interface VideoPlayerProps {
   animeTitle: string;
@@ -49,27 +47,54 @@ export default function VideoPlayer({
       hlsRef.current = null;
     }
 
-    if (url.includes('.m3u8') && window.Hls && window.Hls.isSupported()) {
-      const hls = new window.Hls({
-        xhrSetup: (xhr: XMLHttpRequest) => {
-          xhr.setRequestHeader('Referer', 'https://senshi.live/');
+    if (url.includes('.m3u8') && Hls.isSupported()) {
+      const hls = new Hls({
+        // Route all requests through our proxy
+        xhrSetup: (_xhr: XMLHttpRequest, _url: string) => {
+          // The main URL is already proxied
         },
+        // Enable URL rewriting for segments
+        manifestLoadingTimeOut: 15000,
+        manifestLoadingMaxRetry: 3,
+        levelLoadingTimeOut: 15000,
+        levelLoadingMaxRetry: 3,
+        fragLoadingTimeOut: 20000,
+        fragLoadingMaxRetry: 6,
       });
+
       hlsRef.current = hls;
+
       hls.loadSource(url);
       hls.attachMedia(video);
-      hls.on(window.Hls.Events.MANIFEST_PARSED, () => {
+
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
         video.play().catch(() => {});
         setIsPlaying(true);
       });
-      hls.on(window.Hls.Events.ERROR, (_: any, data: any) => {
+
+      hls.on(Hls.Events.ERROR, (_: any, data: any) => {
         if (data.fatal) {
-          console.error('HLS fatal error:', data);
+          switch (data.type) {
+            case Hls.ErrorTypes.NETWORK_ERROR:
+              // Try to recover on network errors
+              console.error('HLS network error, attempting recovery...');
+              hls.startLoad();
+              break;
+            case Hls.ErrorTypes.MEDIA_ERROR:
+              // Try to recover on media errors
+              console.error('HLS media error, attempting recovery...');
+              hls.recoverMediaError();
+              break;
+            default:
+              console.error('HLS fatal error:', data);
+              hls.destroy();
+              break;
+          }
         }
       });
-    } else if (url.includes('.m3u8') && video.canPlayType('application/vnd.apple.mpegurl')) {
-      // Safari native HLS
-      video.src = url;
+    } else if (url.includes('.m3u8') && Hls.isSupported() === false && video.canPlayType('application/vnd.apple.mpegurl')) {
+      // Safari native HLS - still need to proxy
+      video.src = getProxiedUrl(url);
       video.play().catch(() => {});
       setIsPlaying(true);
     } else {

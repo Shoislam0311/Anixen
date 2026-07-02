@@ -141,3 +141,6 @@ export async function getVideoServer(
 ): Promise<ServerResult> {
   return getBestServer(episode, server);
 }
+
+// Export proxy URL helper
+export { getProxiedUrl } from './fetch-helper';

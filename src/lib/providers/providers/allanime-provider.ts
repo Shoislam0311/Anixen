@@ -12,6 +12,7 @@ import type {
   ServerResult,
   VideoSource,
 } from '@/types/streaming';
+import { proxyFetch, getProxiedUrl } from '../fetch-helper';
 
 const AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:150.0) Gecko/20100101 Firefox/150.0';
 const REFR = 'https://youtu-chan.com';
@@ -48,19 +49,6 @@ function maybeDecodeCustomHex(str: string): string {
   return decodeCustomHex(str.slice(2));
 }
 
-async function safeFetch(url: string, init: RequestInit, ms = 10000): Promise<Response | null> {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), ms);
-  try {
-    const res = await fetch(url, { ...init, signal: controller.signal });
-    clearTimeout(timeoutId);
-    return res;
-  } catch {
-    clearTimeout(timeoutId);
-    return null;
-  }
-}
-
 async function resolveSource(src: { sourceUrl: string; sourceName: string }): Promise<VideoSource[]> {
   const decodedPath = maybeDecodeCustomHex(src.sourceUrl);
   const fetchUrl = decodedPath.startsWith('http')
@@ -70,15 +58,11 @@ async function resolveSource(src: { sourceUrl: string; sourceName: string }): Pr
   // mp4upload: scrape HTML for src
   if (fetchUrl.includes('mp4upload')) {
     try {
-      const res = await safeFetch(fetchUrl, {
-        headers: { 'User-Agent': AGENT, Referer: 'https://www.mp4upload.com' },
-      }, 8000);
-      if (!res?.ok) return [];
-      const html = await res.text();
+      const html = await proxyFetch(fetchUrl);
       const match = html.match(/src:\s*"([^"]+)"/);
       if (match) {
         return [{
-          url: match[1],
+          url: getProxiedUrl(match[1]),
           quality: 'auto',
           type: 'mp4',
           subtitles: [],
@@ -91,7 +75,7 @@ async function resolveSource(src: { sourceUrl: string; sourceName: string }): Pr
   // tools.fast4speed.rsvp: use URL directly
   if (fetchUrl.includes('tools.fast4speed.rsvp')) {
     return [{
-      url: fetchUrl,
+      url: getProxiedUrl(fetchUrl),
       quality: 'auto',
       type: 'mp4',
       subtitles: [],
@@ -100,28 +84,23 @@ async function resolveSource(src: { sourceUrl: string; sourceName: string }): Pr
 
   // wixmp / allanime CDN: fetch clock.json and extract links
   try {
-    const res = await safeFetch(fetchUrl, {
-      headers: { 'User-Agent': AGENT, Referer: REFR },
-    }, 5000);
+    const data = await proxyFetch(fetchUrl);
 
-    if (!res?.ok) return [];
-
-    const contentType = res.headers.get('content-type') ?? '';
-    if (contentType.includes('video') || contentType.includes('octet-stream')) {
+    // If it's a direct video URL
+    if (typeof data === 'string' && data.includes('http')) {
       return [{
-        url: fetchUrl,
+        url: getProxiedUrl(fetchUrl),
         quality: 'auto',
         type: 'm3u8',
         subtitles: [],
       }];
     }
 
-    const data = await res.json();
     const sources: VideoSource[] = [];
     for (const link of data?.links ?? []) {
       if (link.link && typeof link.link === 'string') {
         sources.push({
-          url: link.link,
+          url: getProxiedUrl(link.link),
           quality: link.resolutionStr ?? 'auto',
           type: link.link.includes('.m3u8') ? 'm3u8' : 'mp4',
           subtitles: [],
@@ -148,76 +127,76 @@ export const allanimeProvider: StreamingProvider = {
       limit: 40, page: 1, translationType: mode, countryOrigin: 'ALL',
     };
 
-    const res = await safeFetch(API_BASE, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'User-Agent': AGENT,
-        'Referer': REFR,
-        'Origin': REFR,
-      },
-      body: JSON.stringify({ variables: vars, query: gql }),
-    }, 12000);
+    try {
+      const data = await proxyFetch(API_BASE, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ variables: vars, query: gql }),
+      });
 
-    if (!res?.ok) return [];
-    const data = await res.json();
-    if (!data?.data?.shows?.edges) return [];
+      if (!data?.data?.shows?.edges) return [];
 
-    return data.data.shows.edges.map((edge: any) => ({
-      id: edge._id,
-      title: edge.name,
-      url: `https://allanime.to/anime/${edge._id}`,
-      subOrDub: mode,
-      provider: 'allanime',
-      image: edge.thumbnail,
-    }));
+      return data.data.shows.edges.map((edge: any) => ({
+        id: edge._id,
+        title: edge.name,
+        url: `https://allanime.to/anime/${edge._id}`,
+        subOrDub: mode,
+        provider: 'allanime',
+        image: edge.thumbnail,
+      }));
+    } catch (error) {
+      console.error('Allanime search error:', error);
+      return [];
+    }
   },
 
   async getEpisodes(id: string): Promise<Episode[]> {
     const gql = `query ($showId: String!) { show( _id: $showId ) { _id availableEpisodesDetail }}`;
 
-    const res = await safeFetch(API_BASE, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'User-Agent': AGENT,
-        'Referer': REFR,
-        'Origin': REFR,
-      },
-      body: JSON.stringify({ variables: { showId: id }, query: gql }),
-    }, 10000);
-
-    if (!res?.ok) return [];
-    const data = await res.json();
-    const detail = data?.data?.show?.availableEpisodesDetail ?? {};
-
-    // Combine sub and dub episodes
-    const episodes: Episode[] = [];
-    const subEps = detail.sub ?? [];
-    const dubEps = detail.dub ?? [];
-
-    for (const ep of subEps) {
-      episodes.push({
-        id: `${id}/sub/${ep}`,
-        title: `Episode ${ep}`,
-        number: parseInt(ep, 10),
-        url: '',
-        provider: 'allanime',
+    try {
+      const data = await proxyFetch(API_BASE, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ variables: { showId: id }, query: gql }),
       });
-    }
 
-    // Add dub episodes with different IDs
-    for (const ep of dubEps) {
-      episodes.push({
-        id: `${id}/dub/${ep}`,
-        title: `Episode ${ep} (Dub)`,
-        number: parseInt(ep, 10),
-        url: '',
-        provider: 'allanime',
-      });
-    }
+      const detail = data?.data?.show?.availableEpisodesDetail ?? {};
 
-    return episodes;
+      // Combine sub and dub episodes
+      const episodes: Episode[] = [];
+      const subEps = detail.sub ?? [];
+      const dubEps = detail.dub ?? [];
+
+      for (const ep of subEps) {
+        episodes.push({
+          id: `${id}/sub/${ep}`,
+          title: `Episode ${ep}`,
+          number: parseInt(ep, 10),
+          url: '',
+          provider: 'allanime',
+        });
+      }
+
+      // Add dub episodes with different IDs
+      for (const ep of dubEps) {
+        episodes.push({
+          id: `${id}/dub/${ep}`,
+          title: `Episode ${ep} (Dub)`,
+          number: parseInt(ep, 10),
+          url: '',
+          provider: 'allanime',
+        });
+      }
+
+      return episodes;
+    } catch (error) {
+      console.error('Allanime episodes error:', error);
+      return [];
+    }
   },
 
   async getServers(episode: Episode): Promise<ServerResult[]> {
@@ -232,38 +211,30 @@ export const allanimeProvider: StreamingProvider = {
 
     const params = new URLSearchParams({ variables: vars, extensions: ext });
 
-    // Step 1: GET with persisted query
     let rawStr = '';
-    const getRes = await safeFetch(`${API_BASE}?${params.toString()}`, {
-      method: 'GET',
-      headers: {
-        'User-Agent': AGENT,
-        'Referer': REFR,
-        'Origin': REFR,
-      },
-    }, 10000);
 
-    if (getRes?.ok) {
-      const data = await getRes.json();
+    // Step 1: GET with persisted query
+    try {
+      const data = await proxyFetch(`${API_BASE}?${params.toString()}`);
       rawStr = JSON.stringify(data);
+    } catch {
+      // Continue to POST fallback
     }
 
     // Step 2: POST fallback
     if (!rawStr || (!rawStr.includes('sourceUrl') && !rawStr.includes('tobeparsed'))) {
       const gql = `query ($showId: String!, $translationType: VaildTranslationTypeEnumType!, $episodeString: String!) { episode( showId: $showId translationType: $translationType episodeString: $episodeString ) { episodeString sourceUrls }}`;
-      const postRes = await safeFetch(API_BASE, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'User-Agent': AGENT,
-          'Referer': REFR,
-          'Origin': REFR,
-        },
-        body: JSON.stringify({ variables: { showId, translationType: mode, episodeString: epNum }, query: gql }),
-      }, 10000);
-      if (postRes?.ok) {
-        const data = await postRes.json();
+      try {
+        const data = await proxyFetch(API_BASE, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ variables: { showId, translationType: mode, episodeString: epNum }, query: gql }),
+        });
         rawStr = JSON.stringify(data);
+      } catch {
+        // Continue
       }
     }
 
@@ -320,7 +291,7 @@ export const allanimeProvider: StreamingProvider = {
         const decoded = maybeDecodeCustomHex(src.sourceUrl);
         if (decoded.startsWith('http')) {
           resolvedSources.push({
-            url: decoded,
+            url: getProxiedUrl(decoded),
             quality: 'auto',
             type: decoded.includes('.m3u8') ? 'm3u8' : 'mp4',
             subtitles: [],

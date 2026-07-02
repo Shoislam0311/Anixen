@@ -12,7 +12,7 @@ import type {
   ServerResult,
   VideoSource,
 } from '@/types/streaming';
-import { proxyFetch } from '../fetch-helper';
+import { proxyFetch, getProxiedUrl } from '../fetch-helper';
 
 const BASE_URL = 'https://senshi.live';
 
@@ -106,7 +106,7 @@ export const senshiProvider: StreamingProvider = {
       // Server 1
       if (source.url) {
         videoSources.push({
-          url: source.url,
+          url: getProxiedUrl(source.url),
           type: source.url.includes('.m3u8') ? 'm3u8' : 'mp4',
           quality: 'auto',
           subtitles: [],
@@ -116,7 +116,7 @@ export const senshiProvider: StreamingProvider = {
       // Server 2
       if (source.server2) {
         videoSources.push({
-          url: source.server2,
+          url: getProxiedUrl(source.server2),
           type: source.server2.includes('.m3u8') ? 'm3u8' : 'mp4',
           quality: 'auto',
           subtitles: [],
