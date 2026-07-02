@@ -79,7 +79,7 @@ export function useStreaming(animeTitle: string, episodeNumber: number, malId?: 
 
       setSources(streamSources);
       setSelectedSource(streamSources[0]);
-      setActiveProvider(provider);
+      setActiveProvider(provider as ProviderName);
     } catch (error: any) {
       if (fetchId !== abortRef.current) return;
       console.error('Streaming error:', error);
