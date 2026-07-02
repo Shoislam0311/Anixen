@@ -1,31 +1,31 @@
 /**
  * Fetch helper that routes through the Vercel proxy in production
- * and makes direct requests in local development.
+ * and uses a CORS proxy service in development.
  */
 
 const isProduction = import.meta.env.PROD;
 const PROXY_URL = '/api/proxy';
 
+// CORS proxy for development (free service)
+const CORS_PROXY = 'https://corsproxy.io/?';
+
 export async function proxyFetch(url: string, options?: RequestInit): Promise<any> {
-  if (isProduction) {
-    const proxyUrl = `${PROXY_URL}?target=${encodeURIComponent(url)}`;
-    const res = await fetch(proxyUrl, {
-      ...options,
-      headers: {
-        ...options?.headers,
-      },
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
-      throw new Error(err.error || err.detail || `Request failed (${res.status})`);
-    }
-    return res.json();
-  }
-  // Local development: direct fetch
-  const res = await fetch(url, options);
+  const fetchUrl = isProduction
+    ? `${PROXY_URL}?target=${encodeURIComponent(url)}`
+    : `${CORS_PROXY}${encodeURIComponent(url)}`;
+
+  const res = await fetch(fetchUrl, {
+    ...options,
+    headers: {
+      ...options?.headers,
+    },
+  });
+
   if (!res.ok) {
-    throw new Error(`HTTP ${res.status}`);
+    const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+    throw new Error(err.error || err.detail || `Request failed (${res.status})`);
   }
+
   return res.json();
 }
 
@@ -33,18 +33,17 @@ export async function proxyFetch(url: string, options?: RequestInit): Promise<an
  * Fetch HTML content through proxy
  */
 export async function proxyFetchHtml(url: string, options?: RequestInit): Promise<string> {
-  if (isProduction) {
-    const proxyUrl = `${PROXY_URL}?target=${encodeURIComponent(url)}`;
-    const res = await fetch(proxyUrl, {
-      ...options,
-      headers: {
-        ...options?.headers,
-      },
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return res.text();
-  }
-  const res = await fetch(url, options);
+  const fetchUrl = isProduction
+    ? `${PROXY_URL}?target=${encodeURIComponent(url)}`
+    : `${CORS_PROXY}${encodeURIComponent(url)}`;
+
+  const res = await fetch(fetchUrl, {
+    ...options,
+    headers: {
+      ...options?.headers,
+    },
+  });
+
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.text();
 }
@@ -57,5 +56,6 @@ export function getProxiedUrl(url: string): string {
   if (isProduction) {
     return `${PROXY_URL}?target=${encodeURIComponent(url)}`;
   }
-  return url;
+  // In development, use CORS proxy for video URLs too
+  return `${CORS_PROXY}${encodeURIComponent(url)}`;
 }

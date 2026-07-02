@@ -1,7 +1,10 @@
-export default async function handler(req: any, res: any) {
+import type { VercelRequest, VercelResponse } from '@vercel/node';
+
+export default async function handler(req: VercelRequest, res: VercelResponse) {
+  // CORS headers
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Referer, User-Agent, X-Requested-With');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Referer, User-Agent, X-Requested-With, Origin');
 
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
@@ -13,86 +16,112 @@ export default async function handler(req: any, res: any) {
     return res.status(400).json({ error: 'Missing target parameter' });
   }
 
-  // Allowed providers
-  const ALLOWED = [
-    'https://senshi.live',
-    'https://api.jikan.moe',
-    'https://animeheaven.me',
-    'https://ax.animeheaven.me',
-    'https://api.allanime.day',
-    'https://allanime.day',
-    'https://anikototv.to',
-    'https://anikoto.cz',
-    'https://anikoto.me',
-    'https://anikoto.net',
-    'https://sub.ryuo.to',
+  // Allowed providers - expanded list
+  const ALLOWED_DOMAINS = [
+    'senshi.live',
+    'api.jikan.moe',
+    'animeheaven.me',
+    'ax.animeheaven.me',
+    'api.allanime.day',
+    'allanime.day',
+    'anikototv.to',
+    'anikoto.cz',
+    'anikoto.me',
+    'anikoto.net',
+    'sub.ryuo.to',
+    'youtu-chan.com',
+    'nekostream.site',
   ];
 
-  const isAllowed = ALLOWED.some(o => target.startsWith(o));
-  if (!isAllowed) {
-    return res.status(403).json({ error: 'Target not allowed', target });
-  }
-
   try {
+    const urlObj = new URL(target);
+    const domain = urlObj.hostname;
+
+    const isAllowed = ALLOWED_DOMAINS.some(d => domain === d || domain.endsWith('.' + d));
+    if (!isAllowed) {
+      console.error('Proxy blocked: domain not allowed', domain);
+      return res.status(403).json({ error: 'Target domain not allowed', domain });
+    }
+
+    // Build headers based on target domain
     const headers: Record<string, string> = {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-      'Accept': '*/*',
+      'Accept': 'application/json, text/html, */*',
       'Accept-Language': 'en-US,en;q=0.9',
-      'Connection': 'keep-alive',
     };
 
-    // Set Referer based on target domain
-    if (target.includes('senshi.live')) {
+    // Set Referer and Origin based on target
+    if (domain.includes('senshi')) {
       headers['Referer'] = 'https://senshi.live/';
-    } else if (target.includes('animeheaven.me')) {
+      headers['Origin'] = 'https://senshi.live';
+    } else if (domain.includes('animeheaven')) {
       headers['Referer'] = 'https://animeheaven.me/';
-    } else if (target.includes('allanime')) {
+      headers['Origin'] = 'https://animeheaven.me';
+    } else if (domain.includes('allanime')) {
       headers['Referer'] = 'https://youtu-chan.com';
       headers['Origin'] = 'https://youtu-chan.com';
-    } else if (target.includes('anikoto')) {
+    } else if (domain.includes('anikoto')) {
       headers['Referer'] = 'https://anikototv.to/';
+      headers['Origin'] = 'https://anikototv.to';
     }
 
-    // Forward client headers if provided
-    if (req.headers['x-custom-referer']) {
-      headers['Referer'] = req.headers['x-custom-referer'];
-    }
-    if (req.headers['x-custom-origin']) {
-      headers['Origin'] = req.headers['x-custom-origin'];
-    }
-
-    const fetchOpts: any = {
-      method: req.method === 'POST' ? 'POST' : 'GET',
+    // Build fetch options
+    const fetchOptions: RequestInit = {
+      method: req.method || 'GET',
       headers,
+      redirect: 'follow',
     };
 
-    if (req.method === 'POST' && req.body) {
-      fetchOpts.body = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
+    // Handle POST/PUT requests with body
+    if (req.method === 'POST' || req.method === 'PUT') {
+      let body = req.body;
+
+      // If body is a string, try to parse it
+      if (typeof body === 'string') {
+        try {
+          body = JSON.parse(body);
+        } catch {
+          // Keep as string
+        }
+      }
+
+      fetchOptions.body = typeof body === 'string' ? body : JSON.stringify(body);
       headers['Content-Type'] = 'application/json';
     }
 
-    const response = await fetch(target, fetchOpts);
-    const ct = response.headers.get('content-type') || '';
+    console.log(`[Proxy] ${req.method} ${target}`);
 
-    // Handle video/m3u8 responses - stream directly
-    if (ct.includes('video') || ct.includes('mpegurl') || ct.includes('octet-stream') || target.includes('.m3u8')) {
-      res.setHeader('Content-Type', ct || 'application/vnd.apple.mpegurl');
-      res.setHeader('Cache-Control', 'no-cache');
+    const response = await fetch(target, fetchOptions);
+    const contentType = response.headers.get('content-type') || '';
+
+    console.log(`[Proxy] Response: ${response.status} ${contentType}`);
+
+    // Handle different content types
+    if (contentType.includes('video') || contentType.includes('mpegurl') || contentType.includes('octet-stream')) {
+      // Video/streaming content - buffer and forward
       const buffer = await response.arrayBuffer();
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
       return res.status(response.status).send(Buffer.from(buffer));
     }
 
-    // Handle JSON responses
-    if (ct.includes('application/json')) {
+    if (contentType.includes('application/json')) {
       const data = await response.json();
       return res.status(response.status).json(data);
     }
 
-    // Handle text/HTML responses
+    // Text/HTML content
     const text = await response.text();
-    return res.status(response.status).setHeader('Content-Type', ct || 'text/plain').send(text);
+    return res.status(response.status)
+      .setHeader('Content-Type', contentType || 'text/plain')
+      .send(text);
+
   } catch (error: any) {
-    console.error('Proxy error:', error.message);
-    return res.status(502).json({ error: 'Proxy request failed', detail: error.message });
+    console.error('[Proxy] Error:', error.message);
+    return res.status(502).json({
+      error: 'Proxy request failed',
+      detail: error.message,
+      target,
+    });
   }
 }
