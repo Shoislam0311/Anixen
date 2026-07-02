@@ -1,18 +1,13 @@
 /**
- * Fetch helper that routes through the Vercel proxy in production
- * and uses a CORS proxy service in development.
+ * Fetch helper - uses corsproxy.io for all environments
+ * This avoids needing a custom Vercel proxy function
  */
 
-const isProduction = import.meta.env.PROD;
-const PROXY_URL = '/api/proxy';
-
-// CORS proxy for development (free service)
-const CORS_PROXY = 'https://corsproxy.io/?';
+// Use corsproxy.io as CORS proxy for all requests
+const CORS_PROXY = 'https://corsproxy.io/?url=';
 
 export async function proxyFetch(url: string, options?: RequestInit): Promise<any> {
-  const fetchUrl = isProduction
-    ? `${PROXY_URL}?target=${encodeURIComponent(url)}`
-    : `${CORS_PROXY}${encodeURIComponent(url)}`;
+  const fetchUrl = `${CORS_PROXY}${encodeURIComponent(url)}`;
 
   const res = await fetch(fetchUrl, {
     ...options,
@@ -22,20 +17,18 @@ export async function proxyFetch(url: string, options?: RequestInit): Promise<an
   });
 
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
-    throw new Error(err.error || err.detail || `Request failed (${res.status})`);
+    const text = await res.text().catch(() => '');
+    throw new Error(`HTTP ${res.status}: ${text.slice(0, 100)}`);
   }
 
   return res.json();
 }
 
 /**
- * Fetch HTML content through proxy
+ * Fetch HTML content through CORS proxy
  */
 export async function proxyFetchHtml(url: string, options?: RequestInit): Promise<string> {
-  const fetchUrl = isProduction
-    ? `${PROXY_URL}?target=${encodeURIComponent(url)}`
-    : `${CORS_PROXY}${encodeURIComponent(url)}`;
+  const fetchUrl = `${CORS_PROXY}${encodeURIComponent(url)}`;
 
   const res = await fetch(fetchUrl, {
     ...options,
@@ -53,9 +46,5 @@ export async function proxyFetchHtml(url: string, options?: RequestInit): Promis
  */
 export function getProxiedUrl(url: string): string {
   if (!url) return url;
-  if (isProduction) {
-    return `${PROXY_URL}?target=${encodeURIComponent(url)}`;
-  }
-  // In development, use CORS proxy for video URLs too
   return `${CORS_PROXY}${encodeURIComponent(url)}`;
 }
